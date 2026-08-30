@@ -6,6 +6,25 @@ Everything a caller needs is issued by this service or by your own Supabase
 project; nothing is pulled in from `gcr-api-clean`, `cybercheck-api-database`,
 or any other repo.
 
+## Consistency mechanisms, pulled from the wider deep-read sweep
+
+- **Rate limiting** keyed on the caller's hashed credential, not IP (a shared
+  NAT/proxy shouldn't punish every tenant behind it as one caller) — pattern
+  from `gcr-api-clean/server.js`.
+- **Fail-safe route mounting** (`mount()` in `server.js`) — one broken route
+  file logs a warning at boot instead of crashing the whole server, same
+  idea, same source.
+- **Centralized error handling** (`lib/errors.js`, `lib/asyncHandler.js`) —
+  the standard for new routes going forward: `throw badRequest(...)` inside
+  an `asyncHandler`-wrapped handler, not a hand-written `if (error) return
+  res.status(...)`. Existing routes weren't mass-migrated to this in one
+  pass — that's a real follow-up, not silently skipped.
+- **`npm run check`** (`scripts/check-no-hardwiring.mjs`) — an automated,
+  CI-able check that no route branches on a specific tenant, no URL is
+  hardcoded outside `db.js`, and Apps/Connectors never import each other.
+  Turns "don't hardcode" into a gate a PR can fail, not just a rule I try to
+  remember. Pattern from `cybercheck-web/scripts/check-no-hardwiring.mjs`.
+
 ## Install lifecycle, pulled from cybercheck-cloud
 
 `tenant_apps` and `tenant_connectors` track `installed`/`uninstalled` (and
