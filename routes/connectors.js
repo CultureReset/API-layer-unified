@@ -4,6 +4,9 @@
 // helper between the two files. Apps and Connectors are different systems
 // that happen to both belong to a tenant; that's the only thing about them
 // that's the same.
+//
+// connect/disconnect update a status, same lifecycle reasoning as
+// routes/apps.js — see migrations/001_init.sql.
 
 const express = require('express');
 const router = express.Router();
@@ -23,7 +26,8 @@ router.get('/installed', async (req, res) => {
   const { data, error } = await supabase
     .from('tenant_connectors')
     .select('connector_id, status, connected_at, connectors_catalog(id, name, description, provider)')
-    .eq('tenant_id', req.tenantId);
+    .eq('tenant_id', req.tenantId)
+    .neq('status', 'disconnected');
   if (error) return res.status(500).json({ error: error.message });
   res.json({
     connectors: data.map(row => ({ ...row.connectors_catalog, status: row.status, connected_at: row.connected_at })),
@@ -43,12 +47,20 @@ router.post('/:connectorId/connect', async (req, res) => {
     .maybeSingle();
   if (!exists) return res.status(404).json({ error: `Unknown connector: ${req.params.connectorId}` });
 
-  const { error } = await supabase
+  const { data: existingRow } = await supabase
     .from('tenant_connectors')
-    .upsert(
-      { tenant_id: req.tenantId, connector_id: req.params.connectorId, status: 'pending' },
-      { onConflict: 'tenant_id,connector_id' }
-    );
+    .select('id')
+    .eq('tenant_id', req.tenantId)
+    .eq('connector_id', req.params.connectorId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const patch = { status: 'pending', disconnected_at: null };
+  const { error } = existingRow
+    ? await supabase.from('tenant_connectors').update(patch).eq('id', existingRow.id)
+    : await supabase.from('tenant_connectors').insert({ tenant_id: req.tenantId, connector_id: req.params.connectorId, ...patch });
+
   if (error) return res.status(500).json({ error: error.message });
   res.status(201).json({ status: 'pending', connector_id: req.params.connectorId });
 });
@@ -56,9 +68,10 @@ router.post('/:connectorId/connect', async (req, res) => {
 router.post('/:connectorId/disconnect', async (req, res) => {
   const { error } = await supabase
     .from('tenant_connectors')
-    .delete()
+    .update({ status: 'disconnected', disconnected_at: new Date().toISOString() })
     .eq('tenant_id', req.tenantId)
-    .eq('connector_id', req.params.connectorId);
+    .eq('connector_id', req.params.connectorId)
+    .neq('status', 'disconnected');
   if (error) return res.status(500).json({ error: error.message });
   res.json({ status: 'disconnected', connector_id: req.params.connectorId });
 });

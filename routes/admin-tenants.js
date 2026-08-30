@@ -10,8 +10,10 @@ router.get('/', async (req, res) => {
   const { data: tenants, error } = await supabase.from('tenants').select('id, slug, name, created_at');
   if (error) return res.status(500).json({ error: error.message });
 
-  const { data: appInstalls } = await supabase.from('tenant_apps').select('tenant_id, app_id');
-  const { data: connectorInstalls } = await supabase.from('tenant_connectors').select('tenant_id, connector_id, status');
+  // Only live installs — this view mirrors what a tenant currently has, not
+  // the full history of everything they've ever installed and removed.
+  const { data: appInstalls } = await supabase.from('tenant_apps').select('tenant_id, app_id').eq('status', 'installed');
+  const { data: connectorInstalls } = await supabase.from('tenant_connectors').select('tenant_id, connector_id, status').neq('status', 'disconnected');
 
   const withInstalls = tenants.map(t => ({
     ...t,

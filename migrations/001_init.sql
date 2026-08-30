@@ -61,14 +61,30 @@ create table if not exists public.apps_catalog (
   created_at   timestamptz not null default now()
 );
 
+-- Install lifecycle, not a plain join row — pattern pulled from
+-- cybercheck-cloud/db/003_installations.sql: "installed" and "uninstalled"
+-- are different facts that both deserve to still be true tomorrow. A hard
+-- DELETE on uninstall would erase that an app was ever used; this keeps the
+-- row and marks it instead, so history survives and reinstalling is a real,
+-- observable event rather than an insert that looks like the first one ever.
 create table if not exists public.tenant_apps (
-  tenant_id     uuid not null references public.tenants(id) on delete cascade,
-  app_id        text not null references public.apps_catalog(id) on delete cascade,
-  installed_at  timestamptz not null default now(),
-  primary key (tenant_id, app_id)
+  id             uuid primary key default gen_random_uuid(),
+  tenant_id      uuid not null references public.tenants(id) on delete cascade,
+  app_id         text not null references public.apps_catalog(id) on delete cascade,
+  status         text not null default 'installed' check (status in ('installed', 'uninstalled')),
+  installed_at   timestamptz not null default now(),
+  uninstalled_at timestamptz,
+
+  constraint tenant_apps_uninstalled_records_when
+    check (status <> 'uninstalled' or uninstalled_at is not null)
 );
 
-create index if not exists tenant_apps_tenant_idx on public.tenant_apps (tenant_id);
+-- Only one LIVE install per tenant per app — past installs/uninstalls of the
+-- same app stay in the table as history rather than being overwritten.
+create unique index if not exists tenant_apps_one_live_idx
+  on public.tenant_apps (tenant_id, app_id) where status = 'installed';
+
+create index if not exists tenant_apps_tenant_idx on public.tenant_apps (tenant_id) where status = 'installed';
 
 /* ══════════════════════════════════════════════════════════════════════
    CONNECTORS — third-party tools (Composio-backed or otherwise).
@@ -86,17 +102,28 @@ create table if not exists public.connectors_catalog (
   created_at     timestamptz not null default now()
 );
 
+-- Same install-lifecycle discipline as tenant_apps above. 'disconnected' is
+-- a status, not a deleted row — same reasoning: a tenant unhooking Google
+-- Calendar and reconnecting it later is a real, auditable sequence of
+-- events, not two unrelated inserts with no memory of the first one.
 create table if not exists public.tenant_connectors (
-  tenant_id     uuid not null references public.tenants(id) on delete cascade,
-  connector_id  text not null references public.connectors_catalog(id) on delete cascade,
-  status        text not null default 'pending' check (status in ('pending', 'connected', 'error', 'disconnected')),
-  account_ref   text,
-  connected_at  timestamptz,
-  created_at    timestamptz not null default now(),
-  primary key (tenant_id, connector_id)
+  id              uuid primary key default gen_random_uuid(),
+  tenant_id       uuid not null references public.tenants(id) on delete cascade,
+  connector_id    text not null references public.connectors_catalog(id) on delete cascade,
+  status          text not null default 'pending' check (status in ('pending', 'connected', 'error', 'disconnected')),
+  account_ref     text,
+  connected_at    timestamptz,
+  disconnected_at timestamptz,
+  created_at      timestamptz not null default now(),
+
+  constraint tenant_connectors_disconnected_records_when
+    check (status <> 'disconnected' or disconnected_at is not null)
 );
 
-create index if not exists tenant_connectors_tenant_idx on public.tenant_connectors (tenant_id);
+create unique index if not exists tenant_connectors_one_live_idx
+  on public.tenant_connectors (tenant_id, connector_id) where status <> 'disconnected';
+
+create index if not exists tenant_connectors_tenant_idx on public.tenant_connectors (tenant_id) where status <> 'disconnected';
 
 /* ══════════════════════════════════════════════════════════════════════
    CONTENT SECTIONS — generic per-tenant editable content, a core platform

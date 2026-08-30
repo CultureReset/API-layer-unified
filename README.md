@@ -6,6 +6,17 @@ Everything a caller needs is issued by this service or by your own Supabase
 project; nothing is pulled in from `gcr-api-clean`, `cybercheck-api-database`,
 or any other repo.
 
+## Install lifecycle, pulled from cybercheck-cloud
+
+`tenant_apps` and `tenant_connectors` track `installed`/`uninstalled` (and
+`pending`/`connected`/`error`/`disconnected` for connectors) as a status on a
+persistent row, not an insert-then-delete. This is pulled directly from
+`cybercheck-cloud/db/003_installations.sql`'s installation model — "a hard
+DELETE on uninstall erases that an app was ever used," in that repo's own
+words. A partial unique index (`... where status = 'installed'`) still
+guarantees only one live install per tenant per app; reinstalling reactivates
+the same lineage instead of creating an unrelated second row.
+
 ## Why Apps and Connectors are two separate systems, not one
 
 "Apps" are first-party modules you build yourselves (booking, SMS, reviews).
