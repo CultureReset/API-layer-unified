@@ -1,5 +1,10 @@
--- api-layer-unified — initial schema.
+-- api-layer-unified — full schema, one file.
 --
+-- Originally written across three migrations (init, booking, profile) as
+-- features were added. Squashed back into one here because nothing has ever
+-- run against a live database yet — there's no real migration history to
+-- preserve, and three files reading like a timeline of add-ons was already
+-- the wrong shape for a schema that's meant to read as one coherent design.
 -- Runs against a Supabase project you create and own for THIS platform.
 -- Nothing here references, joins, or depends on any table from any other
 -- CultureReset repo's database — this is a new, independent project.
@@ -21,7 +26,9 @@
 
 create extension if not exists pgcrypto;
 
-/* ── tenants ─────────────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════
+   IDENTITY — tenants, who belongs to one, who's a platform admin
+   ══════════════════════════════════════════════════════════════════════ */
 
 create table if not exists public.tenants (
   id          uuid primary key default gen_random_uuid(),
@@ -40,8 +47,7 @@ create table if not exists public.tenant_members (
 
 create index if not exists tenant_members_user_idx on public.tenant_members (user_id);
 
-/* ── platform admins — separate identity, never joined to tenants ──────── */
-
+-- Separate identity, never joined to tenants.
 create table if not exists public.platform_admins (
   user_id     uuid primary key references auth.users(id) on delete cascade,
   created_at  timestamptz not null default now()
@@ -126,8 +132,76 @@ create unique index if not exists tenant_connectors_one_live_idx
 create index if not exists tenant_connectors_tenant_idx on public.tenant_connectors (tenant_id) where status <> 'disconnected';
 
 /* ══════════════════════════════════════════════════════════════════════
-   CONTENT SECTIONS — generic per-tenant editable content, a core platform
-   feature (not gated behind an app install, unlike Apps/Connectors above).
+   BOOKING APP — the Booking app's own tables. Lives entirely inside the
+   Apps system above; nothing here is referenced by connectors_catalog,
+   tenant_connectors, or any Connectors code. Shape is generalized from the
+   real, live booking model in cybercheck-api-database/server.js
+   (fleet_types / rental_time_slots / rental_pricing / rental_addons), keyed
+   by tenant_id instead of the legacy site_id.
+   ══════════════════════════════════════════════════════════════════════ */
+
+create table if not exists public.booking_resources (
+  id           uuid primary key default gen_random_uuid(),
+  tenant_id    uuid not null references public.tenants(id) on delete cascade,
+  name         text not null,
+  description  text not null default '',
+  image_url    text,
+  is_active    boolean not null default true,
+  sort_order   integer not null default 0,
+  created_at   timestamptz not null default now()
+);
+
+create index if not exists booking_resources_tenant_idx on public.booking_resources (tenant_id);
+
+create table if not exists public.booking_time_slots (
+  id          uuid primary key default gen_random_uuid(),
+  tenant_id   uuid not null references public.tenants(id) on delete cascade,
+  name        text not null,        -- e.g. "Half Day AM", "All Day"
+  is_active   boolean not null default true,
+  sort_order  integer not null default 0
+);
+
+create index if not exists booking_time_slots_tenant_idx on public.booking_time_slots (tenant_id);
+
+-- price for one resource at one time slot — a real join table, not a JSON blob
+create table if not exists public.booking_prices (
+  resource_id   uuid not null references public.booking_resources(id) on delete cascade,
+  time_slot_id  uuid not null references public.booking_time_slots(id) on delete cascade,
+  price         numeric(10,2) not null,
+  primary key (resource_id, time_slot_id)
+);
+
+create table if not exists public.booking_addons (
+  id           uuid primary key default gen_random_uuid(),
+  tenant_id    uuid not null references public.tenants(id) on delete cascade,
+  name         text not null,
+  description  text not null default '',
+  price        numeric(10,2) not null default 0,
+  is_active    boolean not null default true
+);
+
+create index if not exists booking_addons_tenant_idx on public.booking_addons (tenant_id);
+
+create table if not exists public.bookings (
+  id              uuid primary key default gen_random_uuid(),
+  tenant_id       uuid not null references public.tenants(id) on delete cascade,
+  resource_id     uuid not null references public.booking_resources(id),
+  time_slot_id    uuid not null references public.booking_time_slots(id),
+  booking_date    date not null,
+  qty             integer not null default 1,
+  customer_name   text not null,
+  customer_phone  text not null,
+  customer_email  text not null,
+  status          text not null default 'confirmed' check (status in ('confirmed', 'cancelled')),
+  created_at      timestamptz not null default now()
+);
+
+create index if not exists bookings_tenant_date_idx on public.bookings (tenant_id, booking_date);
+
+/* ══════════════════════════════════════════════════════════════════════
+   CONTENT SECTIONS — generic per-tenant editable page content, a core
+   platform feature (not gated behind an app install, unlike Apps/
+   Connectors above).
    ══════════════════════════════════════════════════════════════════════ */
 
 create table if not exists public.content_sections (
@@ -140,6 +214,28 @@ create table if not exists public.content_sections (
 );
 
 create index if not exists content_sections_tenant_idx on public.content_sections (tenant_id, sort_order);
+
+/* ══════════════════════════════════════════════════════════════════════
+   TENANT PROFILE — the directory listing every tenant gets: name (from
+   tenants), category, description, contact, hours, photo. What makes a
+   tenant "white-labelable" as a directory entry (the Chamber-of-Commerce
+   use case). Separate from content_sections, which is free-form page
+   content rather than structured fields a directory grid can sort/filter.
+   ══════════════════════════════════════════════════════════════════════ */
+
+create table if not exists public.tenant_profiles (
+  tenant_id    uuid primary key references public.tenants(id) on delete cascade,
+  category     text,
+  description  text,
+  address      text,
+  phone        text,
+  email        text,
+  hours        text,
+  photo_url    text,
+  updated_at   timestamptz not null default now()
+);
+
+create index if not exists tenant_profiles_category_idx on public.tenant_profiles (category);
 
 /* ── row level security ─────────────────────────────────────────────────
    This API talks to Supabase with the service role key, which bypasses
@@ -154,9 +250,18 @@ alter table public.apps_catalog       enable row level security;
 alter table public.tenant_apps        enable row level security;
 alter table public.connectors_catalog enable row level security;
 alter table public.tenant_connectors  enable row level security;
+alter table public.booking_resources  enable row level security;
+alter table public.booking_time_slots enable row level security;
+alter table public.booking_prices     enable row level security;
+alter table public.booking_addons     enable row level security;
+alter table public.bookings           enable row level security;
 alter table public.content_sections   enable row level security;
+alter table public.tenant_profiles    enable row level security;
 
-revoke all on public.tenants, public.tenant_members, public.platform_admins,
-  public.apps_catalog, public.tenant_apps, public.connectors_catalog,
-  public.tenant_connectors, public.content_sections
+revoke all on
+  public.tenants, public.tenant_members, public.platform_admins,
+  public.apps_catalog, public.tenant_apps,
+  public.connectors_catalog, public.tenant_connectors,
+  public.booking_resources, public.booking_time_slots, public.booking_prices, public.booking_addons, public.bookings,
+  public.content_sections, public.tenant_profiles
   from anon, authenticated;
