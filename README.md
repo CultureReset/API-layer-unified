@@ -71,6 +71,9 @@ token as `Authorization: Bearer <token>`. This API verifies it with
 
 | Path | Auth | Purpose |
 |---|---|---|
+| `GET /api/public/:slug` | **none** | Public directory listing + link-tree data for one tenant — the only route in this repo that takes an identifier from the URL, because it's the only route serving public data to an anonymous visitor rather than private data to an authenticated caller |
+| `GET/PATCH /api/profile` | tenant | This tenant's own directory listing (category, description, hours, photo) |
+| `GET/PATCH /api/admin/directory` \| `/:tenantId` | admin | Browse every tenant's listing, edit any of them — the Chamber-of-Commerce white-label surface |
 | `GET /api/apps/catalog` | tenant | Full app catalog |
 | `GET /api/apps/installed` | tenant | This tenant's installed apps |
 | `POST /api/apps/:id/install` \| `/uninstall` | tenant | Install/remove an app |

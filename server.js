@@ -16,11 +16,17 @@ app.use('/api/apps/booking', tenantRequired, require('./routes/apps/booking'));
 app.use('/api/apps', tenantRequired, require('./routes/apps'));
 app.use('/api/connectors', tenantRequired, require('./routes/connectors'));
 app.use('/api/content', tenantRequired, require('./routes/content'));
+app.use('/api/profile', tenantRequired, require('./routes/profile'));
 
 // Admin-facing — every route here only ever sees req.isAdmin, never a tenant.
 app.use('/api/admin/tenants', adminRequired, require('./routes/admin-tenants'));
 app.use('/api/admin/apps-catalog', adminRequired, require('./routes/admin-apps-catalog'));
 app.use('/api/admin/connectors-catalog', adminRequired, require('./routes/admin-connectors-catalog'));
+app.use('/api/admin/directory', adminRequired, require('./routes/admin-directory'));
+
+// Public — no auth. Read-only. See routes/public.js for why a slug is
+// accepted from the request here and nowhere else.
+app.use('/api/public', require('./routes/public'));
 
 app.get('/api/whoami', tenantRequired, (req, res) => {
   res.json({ tenantId: req.tenantId, tenantSlug: req.tenantSlug, role: req.tenantRole });
